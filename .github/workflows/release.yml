@@ -1,0 +1,74 @@
+name: Build & release
+
+# Pull requests: build + test only.
+# Push/merge to main: build + test, then publish a GitHub Release with the exe.
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: write # needed to create tags and releases
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  build:
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Test
+        run: cargo test --release --locked
+
+      - name: Build
+        run: cargo build --release --locked
+
+      - name: Package
+        id: pkg
+        run: |
+          # Package version comes from Cargo.toml; the run number makes every merge unique.
+          $version = (Select-String -Path Cargo.toml -Pattern '^version = "(.+)"').Matches[0].Groups[1].Value
+          $tag = "v$version-r${{ github.run_number }}"
+          $zipName = "sp-lyrics-rs-$tag-windows-x64.zip"
+
+          New-Item -ItemType Directory dist, stage | Out-Null
+          Copy-Item target/release/sp-lyrics-rs.exe dist/
+          Copy-Item target/release/sp-lyrics-rs.exe, LICENSE, README.md stage/
+          Copy-Item examples stage/examples -Recurse
+          New-Item -ItemType Directory stage/lrc | Out-Null
+          Copy-Item "examples/*.lrc" stage/lrc/
+          Compress-Archive -Path stage/* -DestinationPath "dist/$zipName"
+
+          Get-ChildItem dist -File | ForEach-Object {
+            "$((Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLower())  $($_.Name)"
+          } | Set-Content dist/SHA256SUMS.txt
+
+          "version=$version" >> $env:GITHUB_OUTPUT
+          "tag=$tag" >> $env:GITHUB_OUTPUT
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sp-lyrics-rs-${{ steps.pkg.outputs.tag }}
+          path: dist/*
+
+      - name: Publish release
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "${{ steps.pkg.outputs.tag }}" dist/* `
+            --target "${{ github.sha }}" `
+            --title "sp-lyrics-rs ${{ steps.pkg.outputs.version }} (build ${{ github.run_number }})" `
+            --generate-notes `
+            --latest
