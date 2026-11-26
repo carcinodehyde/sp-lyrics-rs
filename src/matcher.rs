@@ -191,7 +191,7 @@ mod example_tests {
     fn amazing_grace_example() {
         let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("examples");
         let l = crate::lrc::load(&dir.join("amazing grace.lrc")).unwrap();
-        assert!(!l.synced);
+        assert!(!l.synced, "the example should stay plain text so people can try sync mode on it");
         assert_eq!(l.lines.len(), 24);
         assert_eq!(l.lines[0].text, "Amazing grace! How sweet the sound");
         let idx = super::Index::build(&dir);
