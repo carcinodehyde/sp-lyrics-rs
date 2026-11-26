@@ -183,3 +183,20 @@ mod tests {
         assert_eq!(find(&i, "The Weeknd", "Starboy"), Some("Starboy - The Weeknd"));
     }
 }
+
+#[cfg(test)]
+mod example_tests {
+    /// The bundled public-domain example must parse as plain text and match any recording.
+    #[test]
+    fn amazing_grace_example() {
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("examples");
+        let l = crate::lrc::load(&dir.join("amazing grace.lrc")).unwrap();
+        assert!(!l.synced);
+        assert_eq!(l.lines.len(), 24);
+        assert_eq!(l.lines[0].text, "Amazing grace! How sweet the sound");
+        let idx = super::Index::build(&dir);
+        for (artist, title) in [("Judy Collins", "Amazing Grace"), ("Some Choir", "Amazing Grace - Live"), ("X", "Amazing Grace (My Chains Are Gone)")] {
+            assert!(idx.find(artist, title).is_some(), "{artist} - {title}");
+        }
+    }
+}

@@ -44,6 +44,16 @@ For a plain-text `.lrc` without timestamps, or to redo bad timing:
    and the rest stay as plain text below them. The toolbar then shows **Resume sync**, which seeks to just before the last
    timed line and continues from the first untimed one. A partly synced file plays synced up to its last timed line.
 
+### Try it with the example
+
+[`examples/amazing grace.lrc`](examples/amazing%20grace.lrc) holds John Newton's 1779 hymn, which is in the public domain.
+It's plain text, so you can practise sync mode on it:
+
+1. Copy it into your `lrc` folder. The filename has no artist, so it matches **any** Spotify recording titled "Amazing Grace".
+2. Play a traditional recording. Recordings sing different verses, so delete any verse yours skips
+   (right-click → *Edit current .lrc*). Avoid modern rewrites like *Amazing Grace (My Chains Are Gone)*, which add other lyrics.
+3. Hover → **Sync** and tap Space as each line starts.
+
 Space, Backspace and Esc are captured system-wide only while sync mode is active, so tapping works even while Spotify has focus.
 If Spotify refuses the restart, seek to 0:00 yourself, then start tapping.
 
