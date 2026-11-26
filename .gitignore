@@ -1,0 +1,23 @@
+# Rust build output
+/target/
+
+# Local copies of the built exe (it's run from the project root during development)
+/*.exe
+*.pdb
+
+# Per-user runtime files written next to the exe
+/sp-lyrics-rs.ini
+/sp-lyrics-rs.log
+/sp-lyrics.ini
+/sp-lyrics.log
+
+# Lyrics are copyrighted, so keep personal .lrc collections out of the repo
+/lrc/
+*.lrc.bak
+
+# Editors / OS
+.vscode/
+.idea/
+*.swp
+Thumbs.db
+Desktop.ini
