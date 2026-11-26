@@ -18,6 +18,8 @@ pub struct Config {
     pub color_inactive: u32,
     pub karaoke: bool,
     pub locked: bool,
+    /// Lyrics hidden.
+    pub minimized: bool,
     /// Extra global timing offset in ms (positive = lyrics earlier).
     pub offset_ms: i64,
 }
@@ -39,6 +41,7 @@ impl Default for Config {
             color_inactive: 0xD8D8D8,
             karaoke: true,
             locked: false,
+            minimized: false,
             offset_ms: 0,
         }
     }
@@ -86,6 +89,7 @@ impl Config {
                 "color_inactive" => c.color_inactive = hex(v).unwrap_or(c.color_inactive),
                 "karaoke" => c.karaoke = v == "1" || v == "true",
                 "locked" => c.locked = v == "1" || v == "true",
+                "minimized" => c.minimized = v == "1" || v == "true",
                 "offset_ms" => c.offset_ms = v.parse().unwrap_or(0),
                 _ => {}
             }
@@ -103,11 +107,11 @@ impl Config {
              lyrics_dir={}\r\nplayer={}\r\nx={}\r\ny={}\r\nwidth={}\r\nheight={}\r\n\
              font={}\r\nfont_size={}\r\nbold={}\r\n\
              color_active={:06X}\r\ncolor_fill={:06X}\r\ncolor_inactive={:06X}\r\n\
-             karaoke={}\r\nlocked={}\r\noffset_ms={}\r\n",
+             karaoke={}\r\nlocked={}\r\nminimized={}\r\noffset_ms={}\r\n",
             self.lyrics_dir, self.player, self.x, self.y, self.w, self.h,
             self.font, self.font_size, b(self.bold),
             self.color_active, self.color_fill, self.color_inactive,
-            b(self.karaoke), b(self.locked), self.offset_ms,
+            b(self.karaoke), b(self.locked), b(self.minimized), self.offset_ms,
         );
         let _ = std::fs::write(path(), text);
     }

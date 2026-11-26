@@ -30,11 +30,13 @@ const ICON_MINUS: char = '\u{E738}';
 const ICON_PLUS: char = '\u{E710}';
 const ICON_RESET: char = '\u{E72C}';
 const ICON_DONE: char = '\u{E8FB}';
+const ICON_MINIMIZE: char = '\u{E921}';
 
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub enum Btn {
     Label,
     Lock,
+    Minimize,
     Sync,
     SyncUndo,
     SyncSave,
@@ -312,8 +314,10 @@ pub unsafe fn render(app: &mut App, st: &player::State) -> bool {
         }
         rt.BeginDraw();
         // Nearly-invisible background keeps the window grabbable while unlocked.
-        rt.Clear(Some(&col(0, if cfg.locked { 0.0 } else { 1.0 / 255.0 })));
-        if hovered && !cfg.locked {
+        // Locked or minimized: fully transparent (main.rs also makes it click-through).
+        let passive = cfg.locked || cfg.minimized;
+        rt.Clear(Some(&col(0, if passive { 0.0 } else { 1.0 / 255.0 })));
+        if hovered && !passive {
             brush.SetColor(&col(0x101418, 0.55));
             let rr = D2D1_ROUNDED_RECT {
                 rect: D2D_RECT_F { left: 0.5, top: 0.5, right: wf - 0.5, bottom: hf - 0.5 },
@@ -341,6 +345,7 @@ pub unsafe fn render(app: &mut App, st: &player::State) -> bool {
         };
 
         match (&app.track, &app.loaded) {
+            _ if cfg.minimized => {} // lyrics hidden
             (None, _) => status(r, "\u{266A}", Some("Waiting for Spotify to play something\u{2026}")),
             (Some(t), None) => {
                 let big = format!("{} \u{2014} {}", t.artist, t.title);
@@ -420,10 +425,11 @@ pub unsafe fn render(app: &mut App, st: &player::State) -> bool {
         }
 
         // Toolbar while hovered: buttons right-aligned on the top row. When locked, only the
-        // (faint) lock button shows; main.rs makes just that spot clickable.
+        // (faint) lock button shows and main.rs makes just that spot clickable.
+        // Minimized shows nothing at all; it's restored from the tray menu.
         let mut buttons = Vec::new();
         let mut header_right = wf - pad;
-        if hovered {
+        if hovered && !cfg.minimized {
             let has_lrc = app.loaded.as_ref().is_some_and(|l| !l.lyrics.lines.is_empty());
             let off = app.loaded.as_ref().map_or(0, |l| l.lyrics.offset_ms);
             // (button, icon glyph from the Segoe icon font, label)
@@ -453,6 +459,9 @@ pub unsafe fn render(app: &mut App, st: &player::State) -> bool {
             } else {
                 Vec::new()
             };
+            if !cfg.locked && sync_next.is_none() {
+                items.push((Btn::Minimize, Some(ICON_MINIMIZE), String::new()));
+            }
             items.push((Btn::Lock, Some(if cfg.locked { ICON_LOCK } else { ICON_UNLOCK }), String::new()));
 
             let y = 5.0 * s;
@@ -469,13 +478,13 @@ pub unsafe fn render(app: &mut App, st: &player::State) -> bool {
                 let rect = Rect { l: x, t: y, r: x + bw, b: y + bh };
                 let hot = *b != Btn::Label && rect.contains(mx, my);
                 // The locked-mode lock button stays faint until pointed at.
-                let alpha = if cfg.locked && !hot { 0.45 } else { 1.0 };
+                let alpha = if passive && !hot { 0.45 } else { 1.0 };
                 if *b != Btn::Label {
                     let bg = if hot {
                         col(0xFFFFFF, 0.3)
                     } else if *b == Btn::Offset && app.offset_mode {
                         col(cfg.color_fill, 0.45)
-                    } else if cfg.locked {
+                    } else if passive {
                         col(0x101418, 0.55 * alpha) // dark: must stay visible over any background
                     } else {
                         col(0xFFFFFF, 0.13)
@@ -514,7 +523,7 @@ pub unsafe fn render(app: &mut App, st: &player::State) -> bool {
             )
         });
         let header = toast.clone().or(sync_text).or_else(|| {
-            (hovered && !cfg.locked).then(|| match &app.track {
+            (hovered && !passive).then(|| match &app.track {
                 Some(t) => {
                     let note = match app.loaded.as_ref().map(|l| (l.lyrics.timed_count(), l.lyrics.lines.len())) {
                         Some((0, _)) => "  (unsynced)".to_owned(),

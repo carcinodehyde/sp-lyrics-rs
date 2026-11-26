@@ -29,6 +29,7 @@ New or edited files are picked up automatically within about 2 seconds.
 | Menu | Right-click the overlay or the tray icon |
 | Lock (click-through) / unlock | Hover → padlock button (top-right), or left-click the tray icon. While locked, only a faint padlock appears on hover and everything else passes clicks through. |
 | Fix timing for the current song | Hover → **Offset**, then mouse wheel or −/+ (0.1 s steps, saved into the `.lrc` as `[offset:]`). Plain scrolling does nothing until Offset is clicked, and offset mode ends when the mouse leaves the overlay. |
+| Hide / show the lyrics | Hover → minimize button (next to the padlock), or right-click → *Hide lyrics*. While minimized nothing is shown and the whole overlay passes clicks through. To bring the lyrics back, right-click the **tray icon** → *Hide lyrics*. The state is remembered between restarts. |
 | Text size | Ctrl + mouse wheel |
 | Start with Windows | Right-click → *Start with Windows* (per-user startup entry, no admin needed; untick it before moving or deleting the exe) |
 

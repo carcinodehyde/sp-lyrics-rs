@@ -51,6 +51,7 @@ const ID_EXIT: u32 = 112;
 const ID_SYNC: u32 = 113;
 const ID_SYNC_SAVE: u32 = 114;
 const ID_AUTOSTART: u32 = 115;
+const ID_MINIMIZE: u32 = 116;
 
 const HK_SPACE: i32 = 1;
 const HK_BACK: i32 = 2;
@@ -134,7 +135,7 @@ fn main() -> Result<()> {
         }
 
         let mut ex = WS_EX_LAYERED | WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE;
-        if cfg.locked {
+        if cfg.locked || cfg.minimized {
             ex |= WS_EX_TRANSPARENT;
         }
         let hwnd = CreateWindowExW(
@@ -254,6 +255,9 @@ impl App {
         if moving || self.sync.is_some() {
             return FAST_MS;
         }
+        if self.cfg.minimized {
+            return SLOW_MS; // nothing to animate
+        }
         let Some(l) = self.loaded.as_ref().filter(|_| st.playing) else { return SLOW_MS };
         if !l.lyrics.synced {
             return SLOW_MS; // evenly spread plain text: position is approximate anyway
@@ -329,6 +333,15 @@ impl App {
         self.toast(format!("Font size {}", self.cfg.font_size));
     }
 
+    fn set_minimized(&mut self, minimized: bool) {
+        self.cfg.minimized = minimized;
+        self.offset_mode = false;
+        self.r.reset_lines(); // snap straight to the current line on restore
+        self.update_click_through();
+        self.cfg.save();
+        self.toast(if minimized { "Lyrics hidden. Right-click the tray icon \u{2192} Hide lyrics to show them again" } else { "Lyrics shown" }.into());
+    }
+
     fn set_locked(&mut self, locked: bool) {
         self.cfg.locked = locked;
         self.update_click_through();
@@ -362,6 +375,10 @@ impl App {
         unsafe {
             let _ = RegisterHotKey(Some(self.hwnd), HK_BACK, MOD_NOREPEAT, VK_BACK.0 as u32);
             let _ = RegisterHotKey(Some(self.hwnd), HK_ESC, MOD_NOREPEAT, VK_ESCAPE.0 as u32);
+        }
+        if self.cfg.minimized {
+            self.cfg.minimized = false; // syncing needs the lyrics visible
+            self.update_click_through();
         }
         self.offset_mode = false;
         // A partly synced file resumes at its first untimed line; otherwise start over.
@@ -453,17 +470,19 @@ impl App {
             Btn::OffPlus => self.adjust_offset(OFFSET_STEP),
             Btn::OffReset => self.adjust_offset(0),
             Btn::Lock => self.set_locked(!self.cfg.locked),
+            Btn::Minimize => self.set_minimized(true),
             Btn::Label => {}
         }
     }
 
-    /// Locked = click-through, except while the cursor is over the lock button so it can be clicked.
+    /// Minimized = fully click-through (restored from the tray menu). Locked = click-through except
+    /// while the cursor is over the lock button, so it can be clicked.
     fn update_click_through(&mut self) {
         let mut p = POINT::default();
         unsafe {
             let _ = GetCursorPos(&mut p);
         }
-        let want = self.cfg.locked && self.button_at(p.x, p.y) != Some(render::Btn::Lock);
+        let want = self.cfg.minimized || (self.cfg.locked && self.button_at(p.x, p.y).is_none());
         if want != self.click_through {
             self.click_through = want;
             unsafe {
@@ -480,8 +499,12 @@ impl App {
             let _ = GetWindowRect(self.hwnd, &mut r);
         }
         let (x, y) = ((sx - r.left) as f32, (sy - r.top) as f32);
-        // While locked only the lock button is interactive.
-        let usable = |b: &render::Btn| !self.cfg.locked || *b == render::Btn::Lock;
+        // Minimized: nothing is interactive. Locked: only the lock button.
+        let usable = |b: &render::Btn| match () {
+            _ if self.cfg.minimized => false,
+            _ if self.cfg.locked => *b == render::Btn::Lock,
+            _ => true,
+        };
         self.buttons.iter().find(|(b, rc)| usable(b) && rc.contains(x, y)).map(|(b, _)| *b)
     }
 }
@@ -520,8 +543,8 @@ fn wide(s: &str) -> Vec<u16> {
 }
 
 unsafe fn show_menu(hwnd: HWND) {
-    let Some((locked, karaoke, has_lrc, offset, syncing)) = with_app(|a| {
-        (a.cfg.locked, a.cfg.karaoke, a.loaded.is_some(), a.loaded.as_ref().map_or(0, |l| l.lyrics.offset_ms), a.sync.is_some())
+    let Some((locked, karaoke, has_lrc, offset, syncing, minimized)) = with_app(|a| {
+        (a.cfg.locked, a.cfg.karaoke, a.loaded.is_some(), a.loaded.as_ref().map_or(0, |l| l.lyrics.offset_ms), a.sync.is_some(), a.cfg.minimized)
     }) else {
         return;
     };
@@ -542,6 +565,7 @@ unsafe fn show_menu(hwnd: HWND) {
             let _ = AppendMenuW(m, MF_SEPARATOR, 0, None);
         };
         add(ID_LOCK, "Lock (click-through)", locked, true);
+        add(ID_MINIMIZE, "Hide lyrics (minimize)", minimized, !syncing);
         add(ID_KARAOKE, "Karaoke fill", karaoke, true);
         add(ID_AUTOSTART, "Start with Windows", autostart::is_enabled(), true);
         sep();
@@ -635,6 +659,9 @@ unsafe fn command(hwnd: HWND, id: u32) {
         ID_SYNC => {
             with_app(|a| if a.sync.is_some() { a.click(render::Btn::SyncCancel) } else { a.start_sync() });
         }
+        ID_MINIMIZE => {
+            with_app(|a| a.set_minimized(!a.cfg.minimized));
+        }
         ID_AUTOSTART => {
             let on = !autostart::is_enabled();
             let ok = autostart::set(on);
@@ -718,7 +745,7 @@ extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRES
             WM_NCCALCSIZE if wp.0 != 0 => return LRESULT(0),
             WM_NCHITTEST => {
                 let (x, y) = ((lp.0 & 0xFFFF) as i16 as i32, ((lp.0 >> 16) & 0xFFFF) as i16 as i32);
-                match with_app(|a| (a.button_at(x, y), a.cfg.locked)) {
+                match with_app(|a| (a.button_at(x, y), a.cfg.locked || a.cfg.minimized)) {
                     Some((Some(_), _)) => return LRESULT(HTCLIENT as isize),
                     Some((None, true)) => return LRESULT(HTNOWHERE as isize), // locked: nothing else is interactive
                     _ => {}
