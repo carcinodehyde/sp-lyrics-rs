@@ -44,8 +44,8 @@ impl State {
 pub type Shared = Arc<Mutex<State>>;
 
 pub enum Cmd {
-    /// Seek to this position (ms) and make sure playback runs.
-    Seek(i64),
+    /// Seek to this position (ms). `true` also starts playback (sync mode needs the song running).
+    Seek(i64, bool),
 }
 
 /// Spawns the polling thread. `on_track_change` is called (from that thread) whenever
@@ -89,8 +89,8 @@ pub fn spawn(player_filter: String, on_track_change: impl Fn() + Send + 'static)
             if changed {
                 on_track_change();
             }
-            if let Ok(Cmd::Seek(ms)) = rx.recv_timeout(Duration::from_millis(250)) {
-                let ok = mgr.as_ref().and_then(|m| find_session(m, &filter)).is_some_and(|sess| seek(&sess, ms));
+            if let Ok(Cmd::Seek(ms, play)) = rx.recv_timeout(Duration::from_millis(250)) {
+                let ok = mgr.as_ref().and_then(|m| find_session(m, &filter)).is_some_and(|sess| seek(&sess, ms, play));
                 s.lock().unwrap().seek_ok = Some(ok);
             }
         }
@@ -98,12 +98,12 @@ pub fn spawn(player_filter: String, on_track_change: impl Fn() + Send + 'static)
     (shared, tx)
 }
 
-fn seek(sess: &Session, ms: i64) -> bool {
+fn seek(sess: &Session, ms: i64, play: bool) -> bool {
     let ok = sess
         .TryChangePlaybackPositionAsync(ms * 10_000)
         .and_then(|op| op.join())
         .unwrap_or(false);
-    if ok {
+    if ok && play {
         let _ = sess.TryPlayAsync().and_then(|op| op.join());
     }
     ok

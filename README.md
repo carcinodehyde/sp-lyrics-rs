@@ -28,8 +28,9 @@ New or edited files are picked up automatically within about 2 seconds.
 | Move / resize | Drag the overlay / drag its edges (when unlocked) |
 | Menu | Right-click the overlay or the tray icon |
 | Lock (click-through) / unlock | Hover → padlock button (top-right). While locked, only a faint padlock appears on hover and everything else passes clicks through. |
-| Fix timing for the current song | Hover → **Offset**, then mouse wheel or −/+ (0.1 s steps, saved into the `.lrc` as `[offset:]`). Plain scrolling does nothing until Offset is clicked, and offset mode ends when the mouse leaves the overlay. |
+| Fix timing for the current song | Hover → **Offset**, then mouse wheel or −/+ (0.1 s steps, saved into the `.lrc` as `[offset:]`). While Offset is on, the wheel adjusts the offset instead of seeking. Offset mode ends when the mouse leaves the overlay. |
 | Hide / show the lyrics | Hover → minimize button (next to the padlock), right-click → *Hide lyrics*, or left-click the **tray icon**. While minimized nothing is shown and the whole overlay passes clicks through. To bring the lyrics back, left-click the **tray icon** (or use *Hide lyrics* in its right-click menu). The state is remembered between restarts. |
+| Jump to a line (seek Spotify) | Mouse wheel over the lyrics: up = previous line, down = next line. The highlight moves right away and Spotify seeks to that line's start once you stop scrolling. A paused song stays paused. Only for timed lyrics, not while locked or syncing. |
 | Text size | Ctrl + mouse wheel |
 | Start with Windows | Right-click → *Start with Windows* (per-user startup entry, no admin needed; untick it before moving or deleting the exe) |
 
