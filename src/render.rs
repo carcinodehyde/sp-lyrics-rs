@@ -426,7 +426,7 @@ pub unsafe fn render(app: &mut App, st: &player::State) -> bool {
 
         // Toolbar while hovered: buttons right-aligned on the top row. When locked, only the
         // (faint) lock button shows and main.rs makes just that spot clickable.
-        // Minimized shows nothing at all; it's restored from the tray menu.
+        // Minimized shows nothing at all; it's restored from the tray.
         let mut buttons = Vec::new();
         let mut header_right = wf - pad;
         if hovered && !cfg.minimized {
