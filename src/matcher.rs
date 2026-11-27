@@ -10,6 +10,8 @@ struct Entry {
     path: PathBuf,
     artist: Option<Variants>,
     title: Variants,
+    /// Normalized title words, for the "file title is the start of the player title" fallback.
+    title_words: Vec<String>,
     /// Normalized whole filename stem, for "title - artist" swapped names.
     whole: String,
 }
@@ -17,6 +19,16 @@ struct Entry {
 struct Variants {
     full: String,
     set: HashSet<String>,
+}
+
+impl Entry {
+    fn new(path: PathBuf, stem: &str) -> Entry {
+        let (artist, title) = match stem.split_once(" - ") {
+            Some((a, t)) => (Some(artist_variants(a)), t),
+            None => (None, stem),
+        };
+        Entry { whole: norm(stem), path, artist, title: title_variants(title), title_words: words(title) }
+    }
 }
 
 #[derive(Default)]
@@ -35,11 +47,7 @@ impl Index {
                     continue;
                 }
                 let Some(stem) = path.file_stem().and_then(|s| s.to_str()) else { continue };
-                let (artist, title) = match stem.split_once(" - ") {
-                    Some((a, t)) => (Some(artist_variants(a)), title_variants(t)),
-                    None => (None, title_variants(stem)),
-                };
-                entries.push(Entry { whole: norm(stem), path, artist, title });
+                entries.push(Entry::new(path.clone(), stem));
             }
         }
         Index { entries }
@@ -53,12 +61,22 @@ impl Index {
         let sa = artist_variants(artist);
         let st = title_variants(title);
         let swapped = format!("{}{}", st.full, sa.full);
+        let tw = words(title);
         let mut best: Option<(u32, &Entry)> = None;
         for e in &self.entries {
             let score = if e.whole == swapped {
                 12
             } else if e.title.set.is_disjoint(&st.set) {
-                0
+                // Fallback: same artist, and the file's title is the first whole words of the player's
+                // title ("Song" for "Song, Pt. 2"). Needs a named artist and a few letters, so short
+                // titles don't grab everything.
+                let prefix = e.title_words.len() < tw.len()
+                    && e.title_words.iter().map(String::len).sum::<usize>() >= 4
+                    && tw.starts_with(&e.title_words);
+                match &e.artist {
+                    Some(fa) if prefix && artists_match(fa, &sa) => 7,
+                    _ => 0,
+                }
             } else {
                 let exact_title = if e.title.full == st.full { 2 } else { 0 };
                 match &e.artist {
@@ -90,6 +108,15 @@ fn norm(s: &str) -> String {
         .collect()
 }
 
+/// Lowercase letter/digit words ("&" counts as "and"; apostrophes don't split "we'll").
+fn words(s: &str) -> Vec<String> {
+    s.replace('&', " and ")
+        .split(|c: char| !c.is_alphanumeric() && c != '\'' && c != '\u{2019}')
+        .map(norm)
+        .filter(|w| !w.is_empty())
+        .collect()
+}
+
 fn variants(raw: &str, extra: impl IntoIterator<Item = String>) -> Variants {
     let full = norm(raw);
     let mut set: HashSet<String> = extra.into_iter().map(|s| norm(&s)).filter(|s| !s.is_empty()).collect();
@@ -103,10 +130,12 @@ fn title_variants(t: &str) -> Variants {
     let mut extra = Vec::new();
     let no_brackets = strip_brackets(t);
     extra.push(no_brackets.clone());
-    // "Song - Remastered 2011", "Song - Live at X"
+    // "Song - Remastered 2011", "Song: Movement I", "Song A / Song B", en/em dashes
     for s in [t, no_brackets.as_str()] {
-        if let Some((head, _)) = s.split_once(" - ") {
-            extra.push(head.to_owned());
+        for sep in [" - ", ": ", " / ", " \u{2013} ", " \u{2014} ", " | "] {
+            if let Some((head, _)) = s.split_once(sep) {
+                extra.push(head.to_owned());
+            }
         }
     }
     let lower = no_brackets.to_lowercase();
@@ -149,17 +178,7 @@ mod tests {
     use super::*;
 
     fn idx(names: &[&str]) -> Index {
-        let entries = names
-            .iter()
-            .map(|n| {
-                let (artist, title) = match n.split_once(" - ") {
-                    Some((a, t)) => (Some(artist_variants(a)), title_variants(t)),
-                    None => (None, title_variants(n)),
-                };
-                Entry { path: PathBuf::from(n), artist, title, whole: norm(n) }
-            })
-            .collect();
-        Index { entries }
+        Index { entries: names.iter().map(|n| Entry::new(PathBuf::from(n), n)).collect() }
     }
 
     fn find<'a>(i: &'a Index, a: &str, t: &str) -> Option<&'a str> {
@@ -181,6 +200,19 @@ mod tests {
         let i = idx(&["daft punk - get lucky", "Starboy - The Weeknd"]);
         assert_eq!(find(&i, "Daft Punk, Pharrell Williams, Nile Rodgers", "Get Lucky (feat. Pharrell Williams)"), Some("daft punk - get lucky"));
         assert_eq!(find(&i, "The Weeknd", "Starboy"), Some("Starboy - The Weeknd"));
+    }
+
+    #[test]
+    fn matches_subtitles_and_prefixes() {
+        let i = idx(&["The Claypool Lennon Delirium - Blood and Rockets", "artist - song a", "artist - love", "band - hey jude"]);
+        let blood = Some("The Claypool Lennon Delirium - Blood and Rockets");
+        assert_eq!(find(&i, "The Claypool Lennon Delirium", "Blood and Rockets: Movement I, Saga of Jack Parsons / Movement II, Too the Moon"), blood);
+        assert_eq!(find(&i, "Artist", "Song A / Song B"), Some("artist - song a"));
+        assert_eq!(find(&i, "Band", "Hey Jude \u{2013} Remastered 2015"), Some("band - hey jude"));
+        // Prefix fallback: whole words only, artist must match.
+        assert_eq!(find(&i, "Band", "Hey Jude, Pt. 2"), Some("band - hey jude"));
+        assert_eq!(find(&i, "Artist", "Lovesong"), None);
+        assert_eq!(find(&i, "Someone Else", "Hey Jude, Pt. 2"), None);
     }
 }
 
