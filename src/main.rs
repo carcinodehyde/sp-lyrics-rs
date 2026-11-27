@@ -228,8 +228,14 @@ fn main() -> Result<()> {
             let _ = TranslateMessage(&msg);
             DispatchMessageW(&msg);
         }
+        // Disappear first, so exiting feels instant whatever the teardown below costs.
+        let _ = ShowWindow(hwnd, SW_HIDE);
         tray(hwnd, NIM_DELETE);
         with_app(|a| a.cfg.save());
+        // Everything is saved (all file writes are synchronous). End the process outright instead of
+        // letting a normal exit kill the player thread mid-WinRT call and tear down its COM objects,
+        // which made closing hang. The kernel releases the window, hotkeys and single-instance mutex.
+        let _ = windows::Win32::System::Threading::TerminateProcess(windows::Win32::System::Threading::GetCurrentProcess(), 0);
     }
     Ok(())
 }
