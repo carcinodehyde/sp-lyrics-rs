@@ -288,6 +288,7 @@ pub unsafe fn render(app: &mut App, st: &player::State) -> bool {
     let hovered = app.hovered();
     let pos = app.lyric_pos(st);
     let sync_next = app.sync.as_ref().map(|s| s.times.len());
+    let scrub = app.scrub.map(|(i, _)| i);
     let mut cursor = POINT::default();
     unsafe {
         let _ = GetCursorPos(&mut cursor);
@@ -378,6 +379,7 @@ pub unsafe fn render(app: &mut App, st: &player::State) -> bool {
                     // In sync mode the highlighted line is the one the next Space press stamps.
                     let cur = match sync_next {
                         Some(n) => Some(n.min(lines.len() - 1)),
+                        None if scrub.is_some() => scrub.map(|i| i.min(lines.len() - 1)), // wheel seek preview
                         None => l.lyrics.line_at(pos),
                     };
                     let target = match cur {
@@ -405,7 +407,7 @@ pub unsafe fn render(app: &mut App, st: &player::State) -> bool {
                             let t1 = lines[i + 1..].iter().map(|l| l.time_ms).find(|&t| t > t0 && t != lrc::UNTIMED).unwrap_or(t0 + 4000);
                             let p = ((pos - t0) as f32 / (t1 - t0).max(1) as f32).clamp(0.0, 1.0);
                             // No karaoke fill on a gap's note glyph.
-                            if cfg.karaoke && l.lyrics.synced && sync_next.is_none() && ll.rows == 1 && !lines[i].text.is_empty() {
+                            if cfg.karaoke && l.lyrics.synced && sync_next.is_none() && scrub.is_none() && ll.rows == 1 && !lines[i].text.is_empty() {
                                 draw_text(&rt, &brush, &ll.layout, pad, top, col(cfg.color_active, 1.0), o);
                                 let x0 = pad + ll.left;
                                 rt.PushAxisAlignedClip(
