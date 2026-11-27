@@ -339,14 +339,14 @@ impl App {
         self.r.reset_lines(); // snap straight to the current line on restore
         self.update_click_through();
         self.cfg.save();
-        self.toast(if minimized { "Lyrics hidden. Right-click the tray icon \u{2192} Hide lyrics to show them again" } else { "Lyrics shown" }.into());
+        self.toast(if minimized { "Lyrics hidden. Click the tray icon to show them again" } else { "Lyrics shown" }.into());
     }
 
     fn set_locked(&mut self, locked: bool) {
         self.cfg.locked = locked;
         self.update_click_through();
         self.cfg.save();
-        self.toast(if locked { "Locked: clicks pass through. Point at the lock icon (or click the tray icon) to unlock" } else { "Unlocked: drag to move, edges to resize" }.into());
+        self.toast(if locked { "Locked: clicks pass through. Point at the lock icon to unlock" } else { "Unlocked: drag to move, edges to resize" }.into());
     }
 
     fn save_placement(&mut self) {
@@ -475,7 +475,7 @@ impl App {
         }
     }
 
-    /// Minimized = fully click-through (restored from the tray menu). Locked = click-through except
+    /// Minimized = fully click-through (restored from the tray). Locked = click-through except
     /// while the cursor is over the lock button, so it can be clicked.
     fn update_click_through(&mut self) {
         let mut p = POINT::default();
@@ -852,8 +852,11 @@ extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRES
                 match (lp.0 & 0xFFFF) as u32 {
                     WM_LBUTTONUP => {
                         with_app(|a| {
-                            a.set_locked(!a.cfg.locked);
-                            a.frame();
+                            // Show/hide the lyrics; hiding is off while syncing (same as the menu item).
+                            if a.cfg.minimized || a.sync.is_none() {
+                                a.set_minimized(!a.cfg.minimized);
+                                a.frame();
+                            }
                         });
                     }
                     WM_RBUTTONUP => show_menu(hwnd),
