@@ -32,8 +32,8 @@ const WM_TRACK: u32 = WM_APP + 2;
 const TIMER_FRAME: usize = 1;
 const FAST_MS: u32 = 30;
 const SLOW_MS: u32 = 250;
-/// Karaoke fill sweep: 15 fps is smooth enough for a left-to-right colour wipe.
-const KARAOKE_MS: u32 = 66;
+/// Karaoke fill sweep: 15 fps looked steppy, so it runs at the full 30 fps.
+const KARAOKE_MS: u32 = FAST_MS;
 
 const ID_LOCK: u32 = 100;
 const ID_KARAOKE: u32 = 101;
@@ -121,9 +121,30 @@ fn with_app<R>(f: impl FnOnce(&mut App) -> R) -> Option<R> {
     APP.with(|a| a.try_borrow_mut().ok().and_then(|mut a| a.as_mut().map(f)))
 }
 
+/// The overlay never has focus, so Windows 11 would treat it as a background process and put it in
+/// efficiency mode (EcoQoS): slow cores and late timers, which made the lyrics stall until hovered.
+/// The redraw rate is already throttled by `next_frame_ms`, so opting out costs little.
+fn opt_out_of_power_throttling() {
+    use windows::Win32::System::Threading::*;
+    let state = PROCESS_POWER_THROTTLING_STATE {
+        Version: PROCESS_POWER_THROTTLING_CURRENT_VERSION,
+        ControlMask: PROCESS_POWER_THROTTLING_EXECUTION_SPEED | PROCESS_POWER_THROTTLING_IGNORE_TIMER_RESOLUTION,
+        StateMask: 0, // 0 = turn both throttles off
+    };
+    unsafe {
+        let _ = SetProcessInformation(
+            GetCurrentProcess(),
+            ProcessPowerThrottling,
+            &state as *const _ as *const core::ffi::c_void,
+            size_of::<PROCESS_POWER_THROTTLING_STATE>() as u32,
+        );
+    }
+}
+
 fn main() -> Result<()> {
     unsafe {
         let _ = SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
+        opt_out_of_power_throttling();
         CoInitializeEx(None, COINIT_APARTMENTTHREADED).ok()?;
 
         // Single instance.
