@@ -58,6 +58,7 @@ const HK_BACK: i32 = 2;
 const HK_ESC: i32 = 3;
 const HK_ENTER: i32 = 4;
 const OFFSET_STEP: i64 = 100;
+const SCRUB_SETTLE_MS: u128 = 400;
 
 pub struct Loaded {
     pub lyrics: lrc::Lyrics,
@@ -98,6 +99,9 @@ pub struct App {
     cmd: std::sync::mpsc::Sender<player::Cmd>,
     pub sync: Option<SyncState>,
     pub offset_mode: bool,
+    /// Mouse-wheel seek preview: the highlighted line and when the wheel last moved.
+    /// The seek is sent once the wheel has been still for `SCRUB_SETTLE_MS`.
+    pub scrub: Option<(usize, Instant)>,
     pub buttons: Vec<(render::Btn, render::Rect)>,
     track: Option<Track>,
     pub loaded: Option<Loaded>,
@@ -198,6 +202,7 @@ fn main() -> Result<()> {
             cmd,
             sync: None,
             offset_mode: false,
+            scrub: None,
             buttons: Vec::new(),
             track: None,
             loaded: None,
@@ -265,7 +270,11 @@ impl App {
                 self.toast("Spotify refused to seek: restart the song yourself, then tap Space".into());
             }
         }
+        if self.scrub.is_some_and(|(_, at)| at.elapsed().as_millis() >= SCRUB_SETTLE_MS) {
+            self.commit_scrub();
+        }
         if st.track != self.track {
+            self.scrub = None;
             if self.sync.is_some() {
                 self.end_sync();
                 self.toast("Sync cancelled: the song changed".into());
@@ -292,10 +301,46 @@ impl App {
         self.set_timer(self.next_frame_ms(&st, animating || hovered));
     }
 
+    /// Mouse wheel over the lyrics: step the highlight one line back (wheel up) or forward
+    /// (wheel down). The seek itself waits until the wheel settles, see `commit_scrub`.
+    fn scrub_wheel(&mut self, step: i32) {
+        if self.sync.is_some() || self.cfg.locked || self.cfg.minimized {
+            return;
+        }
+        let st = self.state();
+        let pos = self.lyric_pos(&st);
+        let Some(l) = self.loaded.as_ref().filter(|l| l.lyrics.synced && st.track.is_some()) else { return };
+        let timed = l.lyrics.timed_count();
+        if timed == 0 {
+            return;
+        }
+        let i = match (self.scrub, l.lyrics.line_at(pos)) {
+            (Some((i, _)), _) => i as i64 - step as i64,
+            (None, Some(cur)) => cur as i64 - step as i64,
+            (None, None) if step < 0 => 0, // before the first line: wheel down goes to it
+            (None, None) => return,
+        };
+        self.scrub = Some((i.clamp(0, timed as i64 - 1) as usize, Instant::now()));
+    }
+
+    /// Seeks the player to the start of the previewed line (keeps paused songs paused).
+    fn commit_scrub(&mut self) {
+        let Some((i, _)) = self.scrub.take() else { return };
+        let Some(l) = &self.loaded else { return };
+        let Some(line) = l.lyrics.lines.get(i).filter(|ln| ln.time_ms != lrc::UNTIMED) else { return };
+        // Display position = player position + file offset + global offset, so undo both.
+        let ms = (line.time_ms - l.lyrics.offset_ms - self.cfg.offset_ms).max(0);
+        let _ = self.cmd.send(player::Cmd::Seek(ms, false));
+        // Show the new position right away instead of waiting for the next poll.
+        let mut st = self.player.lock().unwrap();
+        st.pos_ms = ms;
+        st.anchor = Some(Instant::now());
+    }
+
     /// Picks the redraw interval: full rate only while something moves, otherwise as slow as
     /// the content allows (software rendering cost scales directly with frame rate).
     fn next_frame_ms(&self, st: &player::State, moving: bool) -> u32 {
-        if moving || self.sync.is_some() {
+        if moving || self.sync.is_some() || self.scrub.is_some() {
             return FAST_MS;
         }
         if self.cfg.minimized {
@@ -436,11 +481,11 @@ impl App {
         };
         let msg = match times.last() {
             Some(&last) => {
-                let _ = self.cmd.send(player::Cmd::Seek((last - 3000).max(0)));
+                let _ = self.cmd.send(player::Cmd::Seek((last - 3000).max(0), true));
                 format!("Resuming at line {}/{total}. Space when a line starts, Enter for a gap (solo)", timed + 1)
             }
             None => {
-                let _ = self.cmd.send(player::Cmd::Seek(0));
+                let _ = self.cmd.send(player::Cmd::Seek(0, true));
                 "Song restarted. Space when a line starts, Enter for a gap (solo)".to_owned()
             }
         };
@@ -519,7 +564,7 @@ impl App {
         };
         // Rewind to just before the previous stamp so the undone one can be tapped again.
         let back = sync.last().map_or(0, |t| (t - 1500).max(0));
-        let _ = self.cmd.send(player::Cmd::Seek(back));
+        let _ = self.cmd.send(player::Cmd::Seek(back, true));
     }
 
     fn click(&mut self, b: render::Btn) {
@@ -870,12 +915,14 @@ extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRES
                 let delta = ((wp.0 >> 16) & 0xFFFF) as i16 as i32;
                 let keys = (wp.0 & 0xFFFF) as u32;
                 let step = if delta > 0 { 1 } else { -1 };
-                // Plain scrolling does nothing unless the Offset button was clicked first.
+                // Ctrl: font size. Offset mode: adjust offset. Otherwise: seek line by line.
                 with_app(|a| {
                     if keys & 0x0008 != 0 || GetKeyState(VK_CONTROL.0 as i32) < 0 {
                         a.set_font_size(a.cfg.font_size + 2.0 * step as f32);
                     } else if a.offset_mode {
                         a.adjust_offset(OFFSET_STEP * step as i64);
+                    } else {
+                        a.scrub_wheel(step);
                     }
                     a.frame();
                 });
