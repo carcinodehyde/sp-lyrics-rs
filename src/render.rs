@@ -31,6 +31,7 @@ const ICON_PLUS: char = '\u{E710}';
 const ICON_RESET: char = '\u{E72C}';
 const ICON_DONE: char = '\u{E8FB}';
 const ICON_MINIMIZE: char = '\u{E921}';
+const ICON_GAP: char = '\u{EC4F}'; // MusicNote
 
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub enum Btn {
@@ -39,6 +40,7 @@ pub enum Btn {
     Minimize,
     Sync,
     SyncUndo,
+    SyncGap,
     SyncSave,
     SyncCancel,
     Offset,
@@ -402,7 +404,8 @@ pub unsafe fn render(app: &mut App, st: &player::State) -> bool {
                             let t0 = lines[i].time_ms;
                             let t1 = lines[i + 1..].iter().map(|l| l.time_ms).find(|&t| t > t0 && t != lrc::UNTIMED).unwrap_or(t0 + 4000);
                             let p = ((pos - t0) as f32 / (t1 - t0).max(1) as f32).clamp(0.0, 1.0);
-                            if cfg.karaoke && l.lyrics.synced && sync_next.is_none() && ll.rows == 1 {
+                            // No karaoke fill on a gap's note glyph.
+                            if cfg.karaoke && l.lyrics.synced && sync_next.is_none() && ll.rows == 1 && !lines[i].text.is_empty() {
                                 draw_text(&rt, &brush, &ll.layout, pad, top, col(cfg.color_active, 1.0), o);
                                 let x0 = pad + ll.left;
                                 rt.PushAxisAlignedClip(
@@ -436,7 +439,11 @@ pub unsafe fn render(app: &mut App, st: &player::State) -> bool {
             let mut items: Vec<(Btn, Option<char>, String)> = if cfg.locked {
                 Vec::new()
             } else if let Some(n) = sync_next {
-                let mut v = vec![(Btn::SyncUndo, Some(ICON_UNDO), "Undo".into()), (Btn::SyncCancel, Some(ICON_CANCEL), "Cancel".into())];
+                let mut v = vec![
+                    (Btn::SyncGap, Some(ICON_GAP), "Gap".into()),
+                    (Btn::SyncUndo, Some(ICON_UNDO), "Undo".into()),
+                    (Btn::SyncCancel, Some(ICON_CANCEL), "Cancel".into()),
+                ];
                 if n > 0 {
                     v.push((Btn::SyncSave, Some(ICON_SAVE), "Save now".into()));
                 }

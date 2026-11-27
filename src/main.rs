@@ -32,8 +32,8 @@ const WM_TRACK: u32 = WM_APP + 2;
 const TIMER_FRAME: usize = 1;
 const FAST_MS: u32 = 30;
 const SLOW_MS: u32 = 250;
-/// Karaoke fill sweep: 15 fps is smooth enough for a left-to-right colour wipe.
-const KARAOKE_MS: u32 = 66;
+/// Karaoke fill sweep: 15 fps looked steppy, so it runs at the full 30 fps.
+const KARAOKE_MS: u32 = FAST_MS;
 
 const ID_LOCK: u32 = 100;
 const ID_KARAOKE: u32 = 101;
@@ -56,6 +56,7 @@ const ID_MINIMIZE: u32 = 116;
 const HK_SPACE: i32 = 1;
 const HK_BACK: i32 = 2;
 const HK_ESC: i32 = 3;
+const HK_ENTER: i32 = 4;
 const OFFSET_STEP: i64 = 100;
 
 pub struct Loaded {
@@ -64,9 +65,30 @@ pub struct Loaded {
     pub mtime: Option<SystemTime>,
 }
 
-/// Tap-to-sync session: `times[i]` is the tapped start of line i.
+/// Tap-to-sync session: `times[i]` is the tapped start of line i. `gaps` are empty lines stamped
+/// with Enter (instrumental breaks), saved as bare `[mm:ss.xx]` lines.
+#[derive(Default)]
 pub struct SyncState {
     pub times: Vec<i64>,
+    gaps: Vec<i64>,
+    /// Stamp order for undo: true = gap.
+    history: Vec<bool>,
+}
+
+impl SyncState {
+    fn last(&self) -> Option<i64> {
+        self.times.last().copied().max(self.gaps.last().copied())
+    }
+
+    /// All lines for saving: tapped lines and gaps in time order, then the untapped rest as plain text.
+    fn merged<'a>(&self, lines: &'a [lrc::Line]) -> Vec<(Option<i64>, &'a str)> {
+        let tapped = self.times.len().min(lines.len());
+        let mut out: Vec<(Option<i64>, &str)> = self.gaps.iter().map(|&g| (Some(g), "")).collect();
+        out.extend(self.times[..tapped].iter().zip(lines).map(|(&t, ln)| (Some(t), ln.text.as_str())));
+        out.sort_by_key(|&(t, _)| t); // stable: a gap stamped at the same time as a line goes first
+        out.extend(lines[tapped..].iter().map(|ln| (None, ln.text.as_str())));
+        out
+    }
 }
 
 pub struct App {
@@ -99,9 +121,30 @@ fn with_app<R>(f: impl FnOnce(&mut App) -> R) -> Option<R> {
     APP.with(|a| a.try_borrow_mut().ok().and_then(|mut a| a.as_mut().map(f)))
 }
 
+/// The overlay never has focus, so Windows 11 would treat it as a background process and put it in
+/// efficiency mode (EcoQoS): slow cores and late timers, which made the lyrics stall until hovered.
+/// The redraw rate is already throttled by `next_frame_ms`, so opting out costs little.
+fn opt_out_of_power_throttling() {
+    use windows::Win32::System::Threading::*;
+    let state = PROCESS_POWER_THROTTLING_STATE {
+        Version: PROCESS_POWER_THROTTLING_CURRENT_VERSION,
+        ControlMask: PROCESS_POWER_THROTTLING_EXECUTION_SPEED | PROCESS_POWER_THROTTLING_IGNORE_TIMER_RESOLUTION,
+        StateMask: 0, // 0 = turn both throttles off
+    };
+    unsafe {
+        let _ = SetProcessInformation(
+            GetCurrentProcess(),
+            ProcessPowerThrottling,
+            &state as *const _ as *const core::ffi::c_void,
+            size_of::<PROCESS_POWER_THROTTLING_STATE>() as u32,
+        );
+    }
+}
+
 fn main() -> Result<()> {
     unsafe {
         let _ = SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
+        opt_out_of_power_throttling();
         CoInitializeEx(None, COINIT_APARTMENTTHREADED).ok()?;
 
         // Single instance.
@@ -375,6 +418,7 @@ impl App {
         unsafe {
             let _ = RegisterHotKey(Some(self.hwnd), HK_BACK, MOD_NOREPEAT, VK_BACK.0 as u32);
             let _ = RegisterHotKey(Some(self.hwnd), HK_ESC, MOD_NOREPEAT, VK_ESCAPE.0 as u32);
+            let _ = RegisterHotKey(Some(self.hwnd), HK_ENTER, MOD_NOREPEAT, VK_RETURN.0 as u32);
         }
         if self.cfg.minimized {
             self.cfg.minimized = false; // syncing needs the lyrics visible
@@ -393,21 +437,22 @@ impl App {
         let msg = match times.last() {
             Some(&last) => {
                 let _ = self.cmd.send(player::Cmd::Seek((last - 3000).max(0)));
-                format!("Resuming at line {}/{total}. Press Space each time a new line starts", timed + 1)
+                format!("Resuming at line {}/{total}. Space when a line starts, Enter for a gap (solo)", timed + 1)
             }
             None => {
                 let _ = self.cmd.send(player::Cmd::Seek(0));
-                "Song restarted. Press Space each time a new line starts".to_owned()
+                "Song restarted. Space when a line starts, Enter for a gap (solo)".to_owned()
             }
         };
-        self.sync = Some(SyncState { times });
+        let history = vec![false; times.len()];
+        self.sync = Some(SyncState { times, history, ..Default::default() });
         self.toast(msg);
     }
 
     fn end_sync(&mut self) {
         self.sync = None;
         unsafe {
-            for id in [HK_SPACE, HK_BACK, HK_ESC] {
+            for id in [HK_SPACE, HK_BACK, HK_ESC, HK_ENTER] {
                 let _ = UnregisterHotKey(Some(self.hwnd), id);
             }
         }
@@ -416,11 +461,33 @@ impl App {
     fn sync_tap(&mut self) {
         let pos = self.state().position_ms();
         let (Some(sync), Some(l)) = (&mut self.sync, &self.loaded) else { return };
-        let t = sync.times.last().map_or(pos, |&last| pos.max(last));
-        sync.times.push(t);
-        if sync.times.len() >= l.lyrics.lines.len() {
-            self.save_sync(); // every line stamped
+        let total = l.lyrics.lines.len();
+        if sync.times.len() >= total {
+            self.save_sync(); // every line already stamped: Space finishes
+            return;
         }
+        sync.times.push(sync.last().map_or(pos, |last| pos.max(last)));
+        sync.history.push(false);
+        if sync.times.len() == total {
+            self.toast("All lines stamped. Enter adds an ending gap, Space saves".into());
+        }
+    }
+
+    /// Stamps an empty line now, so an instrumental break clears the previous line.
+    fn sync_gap(&mut self) {
+        let pos = self.state().position_ms();
+        let (Some(sync), Some(l)) = (&mut self.sync, &self.loaded) else { return };
+        // The next line is itself a gap from an earlier sync: stamp that instead of adding another.
+        if l.lyrics.lines.get(sync.times.len()).is_some_and(|ln| ln.text.is_empty()) {
+            return self.sync_tap();
+        }
+        let t = sync.last().map_or(pos, |last| pos.max(last));
+        if sync.last() == Some(t) && sync.history.last() == Some(&true) {
+            return; // double press
+        }
+        sync.gaps.push(t);
+        sync.history.push(true);
+        self.toast("Gap added".into());
     }
 
     /// Writes the tapped timings into the .lrc in place. When saving early, untapped lines stay
@@ -433,9 +500,7 @@ impl App {
         }
         let total = l.lyrics.lines.len();
         let tapped = sync.times.len().min(total);
-        let times = sync.times[..tapped].iter().map(|&t| Some(t)).chain(std::iter::repeat(None));
-        let lines: Vec<(Option<i64>, &str)> = times.zip(&l.lyrics.lines).map(|(t, ln)| (t, ln.text.as_str())).collect();
-        let res = lrc::save_synced(&l.path, &lines);
+        let res = lrc::save_synced(&l.path, &sync.merged(&l.lyrics.lines));
         self.end_sync();
         self.load_lyrics();
         self.toast(match res {
@@ -447,11 +512,13 @@ impl App {
 
     fn sync_undo(&mut self) {
         let Some(sync) = &mut self.sync else { return };
-        if sync.times.pop().is_none() {
-            return;
-        }
-        // Rewind to just before the previous stamped line so the undone line can be tapped again.
-        let back = sync.times.last().map_or(0, |&t| (t - 1500).max(0));
+        match sync.history.pop() {
+            Some(true) => sync.gaps.pop(),
+            Some(false) => sync.times.pop(),
+            None => return,
+        };
+        // Rewind to just before the previous stamp so the undone one can be tapped again.
+        let back = sync.last().map_or(0, |t| (t - 1500).max(0));
         let _ = self.cmd.send(player::Cmd::Seek(back));
     }
 
@@ -460,6 +527,7 @@ impl App {
         match b {
             Btn::Sync => self.start_sync(),
             Btn::SyncUndo => self.sync_undo(),
+            Btn::SyncGap => self.sync_gap(),
             Btn::SyncSave => self.save_sync(),
             Btn::SyncCancel => {
                 self.end_sync();
@@ -819,6 +887,7 @@ extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRES
                         HK_SPACE => a.sync_tap(),
                         HK_BACK => a.sync_undo(),
                         HK_ESC => a.click(render::Btn::SyncCancel),
+                        HK_ENTER => a.sync_gap(),
                         _ => {}
                     }
                     a.frame();
@@ -926,5 +995,24 @@ fn make_icon() -> HICON {
         let _ = DeleteObject(color.into());
         let _ = DeleteObject(mask.into());
         icon
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn sync_gaps_merge_in_time_order() {
+        let lines: Vec<lrc::Line> = ["a", "b", "c"].iter().map(|t| lrc::Line { time_ms: 0, text: (*t).into() }).collect();
+        let s = SyncState { times: vec![1000, 9000], gaps: vec![5000, 9000], history: vec![false, true, false, true] };
+        let m = s.merged(&lines);
+        assert_eq!(m, [(Some(1000), "a"), (Some(5000), ""), (Some(9000), ""), (Some(9000), "b"), (None, "c")]);
+        let text = lrc::synced_text("", &m, "\n");
+        assert_eq!(text, "[00:01.00]a\n[00:05.00]\n[00:09.00]\n[00:09.00]b\nc\n");
+        // A saved gap parses back as a timed empty line, so resuming keeps it.
+        let l = lrc::parse(&text);
+        assert_eq!((l.timed_count(), l.lines[1].text.as_str()), (4, ""));
+        assert_eq!(l.line_at(6000), Some(1));
     }
 }

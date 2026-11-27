@@ -38,9 +38,11 @@ New or edited files are picked up automatically within about 2 seconds.
 For a plain-text `.lrc` without timestamps, or to redo bad timing:
 
 1. Hover the overlay → **Sync**, or right-click → *Sync timing by tapping Space…*. The song restarts from the beginning.
-2. Press **Space** the moment each highlighted line starts. **Backspace** undoes the last tap and rewinds a little.
-   **Esc** cancels without saving.
-3. After the last line is tapped, the same `.lrc` file is updated in place with the timings.
+2. Press **Space** the moment each highlighted line starts. When a solo or instrumental break starts, press **Enter**
+   (or the **Gap** button) to add a gap: an empty `[mm:ss.xx]` line that clears the previous line and shows a ♪.
+   **Backspace** undoes the last tap or gap and rewinds a little. **Esc** cancels without saving.
+3. After the last line is tapped you can still press Enter for an ending gap. Press Space (or **Save now**) to finish,
+   and the same `.lrc` file is updated in place with the timings.
    To stop early, click **Save now** (toolbar) or right-click → *Save sync now*. Tapped lines are saved with timestamps,
    and the rest stay as plain text below them. The toolbar then shows **Resume sync**, which seeks to just before the last
    timed line and continues from the first untimed one. A partly synced file plays synced up to its last timed line.
@@ -55,7 +57,7 @@ It's plain text, so you can practise sync mode on it:
    (right-click → *Edit current .lrc*). Avoid modern rewrites like *Amazing Grace (My Chains Are Gone)*, which add other lyrics.
 3. Hover → **Sync** and tap Space as each line starts.
 
-Space, Backspace and Esc are captured system-wide only while sync mode is active, so tapping works even while Spotify has focus.
+Space, Enter, Backspace and Esc are captured system-wide only while sync mode is active, so tapping works even while Spotify has focus.
 If Spotify refuses the restart, seek to 0:00 yourself, then start tapping.
 
 Settings (colors, font, global `offset_ms`, followed player) live in `sp-lyrics-rs.ini` next to the exe.
